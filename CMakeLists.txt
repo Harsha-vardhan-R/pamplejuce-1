@@ -17,7 +17,7 @@ include(JUCEDefaults)
 # This is the internal name of the project and the name of JUCE's shared code target
 # Note: This cannot have spaces (it may be 2024, but you can't have it all!)
 # Worry not, JUCE's PRODUCT_NAME can have spaces (and is what DAWs display)
-set(PROJECT_NAME "Pamplejuce")
+set(PROJECT_NAME "mb_test")
 
 # Worry not, JUCE's PRODUCT_NAME can have spaces (and is what DAWs will display)
 # You can also just have it be the same thing as PROJECT_NAME
@@ -100,7 +100,6 @@ clap_juce_extensions_plugin(TARGET "${PROJECT_NAME}"
 # Enable fast math, C++20 and a few other target defaults
 include(SharedCodeDefaults)
 
-
 # Manually list all .h and .cpp files for the plugin
 # If you are like me, you'll use globs for your sanity.
 # Just ensure you employ CONFIGURE_DEPENDS so the build system picks up changes
@@ -114,6 +113,34 @@ include(Assets)
 
 # MacOS only: Cleans up folder and target organization on Xcode.
 include(XcodePrettify)
+
+# ONNX Runtime Setup
+set(ONNXRUNTIME_DIR "${CMAKE_CURRENT_SOURCE_DIR}/source/onnxruntime")
+
+# Add ONNX Runtime include directories
+target_include_directories(SharedCode
+    INTERFACE
+    "${ONNXRUNTIME_DIR}/include"
+)
+
+# Link ONNX Runtime library
+target_link_libraries(SharedCode
+    INTERFACE
+    "${ONNXRUNTIME_DIR}/lib/onnxruntime.lib"
+    "${ONNXRUNTIME_DIR}/lib/onnxruntime_providers_shared.lib"
+)
+
+# Copy DLLs to build output (Windows)
+if(WIN32)
+    add_custom_command(TARGET "${PROJECT_NAME}" POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${ONNXRUNTIME_DIR}/lib/onnxruntime.dll"
+        "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${ONNXRUNTIME_DIR}/lib/onnxruntime_providers_shared.dll"
+        "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
+    )
+endif()
 
 # This is where you can set preprocessor definitions for JUCE and your plugin
 target_compile_definitions(SharedCode
@@ -137,7 +164,7 @@ target_compile_definitions(SharedCode
 
 # Link to any other modules you added (with juce_add_module) here!
 # Usually JUCE modules must have PRIVATE visibility
-# See https://github.com/juce-framework/JUCE/blob/master/docs/CMake%20API.md#juce_add_module
+# See [https://github.com/juce-framework/JUCE/blob/master/docs/CMake%20API.md#juce_add_module](https://github.com/juce-framework/JUCE/blob/master/docs/CMake%20API.md#juce_add_module)
 # However, with Pamplejuce, you'll link modules to SharedCode with INTERFACE visibility
 # This allows the JUCE plugin targets and the Tests target to link against it
 target_link_libraries(SharedCode

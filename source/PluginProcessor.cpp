@@ -1,185 +1,102 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 
-//==============================================================================
 PluginProcessor::PluginProcessor()
-     : AudioProcessor (BusesProperties()
-                     #if ! JucePlugin_IsMidiEffect
-                      #if ! JucePlugin_IsSynth
-                       .withInput  ("Input",  juce::AudioChannelSet::stereo(), true)
-                      #endif
-                       .withOutput ("Output", juce::AudioChannelSet::stereo(), true)
-                     #endif
-                       )
+    : AudioProcessor(BusesProperties())
 {
+    try 
+    {
+        // Initialize Ort with compatible API version
+        ortEnv = std::make_unique<Ort::Env>(ORT_LOGGING_LEVEL_WARNING, "moonbeam");
+        
+        // Load ONNX model at startup
+        juce::File modelFile = juce::File::getCurrentWorkingDirectory().getChildFile("moonbeam_309M_pop.onnx");
+        
+        if (modelFile.existsAsFile())
+        {
+            Ort::SessionOptions sessionOptions;
+            sessionOptions.SetIntraOpNumThreads(1);
+            
+            ortSession = std::make_unique<Ort::Session>(*ortEnv, modelFile.getFullPathName().toWideCharPointer(), sessionOptions);
+            DBG("✓ ONNX model loaded successfully");
+        }
+        else
+        {
+            DBG("✗ ONNX model file not found: moonbeam_309M_pop.onnx");
+        }
+    }
+    catch (const std::exception& e)
+    {
+        DBG("✗ Error initializing ONNX: " + juce::String(e.what()));
+    }
 }
 
 PluginProcessor::~PluginProcessor()
 {
-}
-
-//==============================================================================
-const juce::String PluginProcessor::getName() const
-{
-    return JucePlugin_Name;
-}
-
-bool PluginProcessor::acceptsMidi() const
-{
-   #if JucePlugin_WantsMidiInput
-    return true;
-   #else
-    return false;
-   #endif
-}
-
-bool PluginProcessor::producesMidi() const
-{
-   #if JucePlugin_ProducesMidiOutput
-    return true;
-   #else
-    return false;
-   #endif
-}
-
-bool PluginProcessor::isMidiEffect() const
-{
-   #if JucePlugin_IsMidiEffect
-    return true;
-   #else
-    return false;
-   #endif
-}
-
-double PluginProcessor::getTailLengthSeconds() const
-{
-    return 0.0;
-}
-
-int PluginProcessor::getNumPrograms()
-{
-    return 1;   // NB: some hosts don't cope very well if you tell them there are 0 programs,
-                // so this should be at least 1, even if you're not really implementing programs.
-}
-
-int PluginProcessor::getCurrentProgram()
-{
-    return 0;
-}
-
-void PluginProcessor::setCurrentProgram (int index)
-{
-    juce::ignoreUnused (index);
-}
-
-const juce::String PluginProcessor::getProgramName (int index)
-{
-    juce::ignoreUnused (index);
-    return {};
-}
-
-void PluginProcessor::changeProgramName (int index, const juce::String& newName)
-{
-    juce::ignoreUnused (index, newName);
-}
-
-//==============================================================================
-void PluginProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
-{
-    // Use this method as the place to do any pre-playback
-    // initialisation that you need..
-    juce::ignoreUnused (sampleRate, samplesPerBlock);
-}
-
-void PluginProcessor::releaseResources()
-{
-    // When playback stops, you can use this as an opportunity to free up any
-    // spare memory, etc.
-}
-
-bool PluginProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
-{
-  #if JucePlugin_IsMidiEffect
-    juce::ignoreUnused (layouts);
-    return true;
-  #else
-    // This is the place where you check if the layout is supported.
-    // In this template code we only support mono or stereo.
-    if (layouts.getMainOutputChannelSet() != juce::AudioChannelSet::mono()
-     && layouts.getMainOutputChannelSet() != juce::AudioChannelSet::stereo())
-        return false;
-
-    // This checks if the input layout matches the output layout
-   #if ! JucePlugin_IsSynth
-    if (layouts.getMainOutputChannelSet() != layouts.getMainInputChannelSet())
-        return false;
-   #endif
-
-    return true;
-  #endif
-}
-
-void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer,
-                                              juce::MidiBuffer& midiMessages)
-{
-    juce::ignoreUnused (midiMessages);
-
-    juce::ScopedNoDenormals noDenormals;
-    auto totalNumInputChannels  = getTotalNumInputChannels();
-    auto totalNumOutputChannels = getTotalNumOutputChannels();
-
-    // In case we have more outputs than inputs, this code clears any output
-    // channels that didn't contain input data, (because these aren't
-    // guaranteed to be empty - they may contain garbage).
-    // This is here to avoid people getting screaming feedback
-    // when they first compile a plugin, but obviously you don't need to keep
-    // this code if your algorithm always overwrites all the output channels.
-    for (auto i = totalNumInputChannels; i < totalNumOutputChannels; ++i)
-        buffer.clear (i, 0, buffer.getNumSamples());
-
-    // This is the place where you'd normally do the guts of your plugin's
-    // audio processing...
-    // Make sure to reset the state if your inner loop is processing
-    // the samples and the outer loop is handling the channels.
-    // Alternatively, you can process the samples with the channels
-    // interleaved by keeping the same state.
-    for (int channel = 0; channel < totalNumInputChannels; ++channel)
-    {
-        auto* channelData = buffer.getWritePointer (channel);
-        juce::ignoreUnused (channelData);
-        // ..do something to the data...
-    }
-}
-
-//==============================================================================
-bool PluginProcessor::hasEditor() const
-{
-    return true; // (change this to false if you choose to not supply an editor)
+    // unique_ptr automatically deletes ortSession and ortEnv
 }
 
 juce::AudioProcessorEditor* PluginProcessor::createEditor()
 {
-    return new PluginEditor (*this);
+    return new PluginEditor(*this);
 }
 
-//==============================================================================
-void PluginProcessor::getStateInformation (juce::MemoryBlock& destData)
+void PluginProcessor::runInference(const juce::File& midiFile, float temperature, float topP, int promptLen, int maxGenLen, std::function<void(const juce::String&)> logCallback)
 {
-    // You should use this method to store your parameters in the memory block.
-    // You could do that either as raw data, or use the XML or ValueTree classes
-    // as intermediaries to make it easy to save and load complex data.
-    juce::ignoreUnused (destData);
+    juce::ScopedLock lock(inferenceLock);
+    
+    if (!ortSession)
+    {
+        logCallback("ONNX model not loaded!");
+        return;
+    }
+    
+    if (!midiFile.existsAsFile())
+    {
+        logCallback("MIDI file does not exist!");
+        return;
+    }
+    
+    logCallback("Reading MIDI file: " + midiFile.getFullPathName());
+    
+    // --- MIDI to tokens (placeholder, replace with your actual tokenizer) ---
+    std::vector<int64_t> inputTokens(promptLen, 1); // Dummy tokens
+    size_t seqLen = inputTokens.size();
+    
+    // --- Prepare ONNX input ---
+    std::vector<int64_t> inputShape = { 1, (int64_t)seqLen, 6 }; // Adjust shape as needed
+    std::vector<int64_t> inputData(inputTokens); // Replace with actual tokenized data
+    
+    try
+    {
+        Ort::AllocatorWithDefaultOptions allocator;
+        Ort::AllocatedStringPtr inputName = ortSession->GetInputNameAllocated(0, allocator);
+        Ort::AllocatedStringPtr outputName = ortSession->GetOutputNameAllocated(0, allocator);
+        
+        Ort::MemoryInfo memInfo = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
+        Ort::Value inputTensor = Ort::Value::CreateTensor<int64_t>(memInfo, inputData.data(), inputData.size(), inputShape.data(), inputShape.size());
+        
+        logCallback("Running ONNX inference...");
+        
+        std::vector<Ort::Value> ortInputs;
+        ortInputs.push_back(std::move(inputTensor));
+        
+        std::vector<const char*> inputNames = { inputName.get() };
+        std::vector<const char*> outputNames = { outputName.get() };
+        
+        auto outputTensors = ortSession->Run(Ort::RunOptions{ nullptr }, inputNames.data(), ortInputs.data(), 1, outputNames.data(), 1);
+        
+        // --- Postprocess output (placeholder) ---
+        logCallback("Inference complete. Output tensor shape: " + juce::String((int)outputTensors[0].GetTensorTypeAndShapeInfo().GetShape()[0]));
+        logCallback("TODO: Convert output tokens to MIDI and save file.");
+    }
+    catch (const std::exception& e)
+    {
+        logCallback("✗ Inference error: " + juce::String(e.what()));
+    }
 }
 
-void PluginProcessor::setStateInformation (const void* data, int sizeInBytes)
-{
-    // You should use this method to restore your parameters from this memory block,
-    // whose contents will have been created by the getStateInformation() call.
-    juce::ignoreUnused (data, sizeInBytes);
-}
-
-//==============================================================================
-// This creates new instances of the plugin..
+// Entry point for JUCE plugin - REQUIRED!
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
 {
     return new PluginProcessor();
